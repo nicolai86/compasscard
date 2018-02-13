@@ -74,7 +74,7 @@ type UsageRecord struct {
 	Product        string
 	LineItem       string
 	Amount         float64
-	BalanceDetails string
+	BalanceDetails float64
 	OrderDate      string
 	Payment        string
 	OrderNumber    string
@@ -94,7 +94,11 @@ func parseUsageRecord(line []string) (*UsageRecord, error) {
 	if err != nil {
 		return nil, err
 	}
-	val, err := strconv.ParseFloat(strings.Replace(line[4], "$", "", -1), 64)
+	amount, err := strconv.ParseFloat(strings.Replace(line[4], "$", "", -1), 64)
+	if err != nil {
+		return nil, err
+	}
+	balance, err := strconv.ParseFloat(strings.Replace(line[5], "$", "", -1), 64)
 	if err != nil {
 		return nil, err
 	}
@@ -103,8 +107,8 @@ func parseUsageRecord(line []string) (*UsageRecord, error) {
 		Transaction:    line[1],
 		Product:        line[2],
 		LineItem:       line[3],
-		Amount:         val,
-		BalanceDetails: line[5],
+		Amount:         amount,
+		BalanceDetails: balance,
 		OrderDate:      line[6],
 		Payment:        line[7],
 		OrderNumber:    line[8],
@@ -114,6 +118,32 @@ func parseUsageRecord(line []string) (*UsageRecord, error) {
 }
 
 const usageDateLayout = "02/01/2006 15:04:05 PM"
+
+func Parse(raw []byte) ([]UsageRecord, error) {
+	r := csv.NewReader(strings.NewReader(string(raw)))
+	header := true
+	lines := []UsageRecord{}
+	for {
+		line, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if header {
+			header = !header
+			continue
+		}
+
+		record, err := parseUsageRecord(line)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, *record)
+	}
+	return lines, nil
+}
 
 func (s *Session) Usage(ccsn string, opts UsageOptions) ([]UsageRecord, []byte, error) {
 	q := url.Values{}
@@ -136,27 +166,9 @@ func (s *Session) Usage(ccsn string, opts UsageOptions) ([]UsageRecord, []byte, 
 		return nil, nil, err
 	}
 
-	r := csv.NewReader(strings.NewReader(string(bs)))
-	header := true
-	lines := []UsageRecord{}
-	for {
-		line, err := r.Read()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		if header {
-			header = !header
-			continue
-		}
-
-		record, err := parseUsageRecord(line)
-		if err != nil {
-			return nil, nil, err
-		}
-		lines = append(lines, *record)
+	lines, err := Parse(bs)
+	if err != nil {
+		return nil, nil, err
 	}
 	return lines, bs, nil
 }

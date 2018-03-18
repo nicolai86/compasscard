@@ -89,17 +89,27 @@ type UsageOptions struct {
 
 const usageRecordLayout = "Jan-02-2006 15:04 PM" // Jan-30-2018 06:08 PM
 
+func parseAmount(amount string) (float64, error) {
+	val := strings.Replace(amount, "$", "", -1)
+	if val == "" {
+		return 0.0, nil
+	}
+	return strconv.ParseFloat(val, 64)
+}
+
 func parseUsageRecord(line []string) (*UsageRecord, error) {
 	t, err := time.Parse(usageRecordLayout, line[0])
 	if err != nil {
 		return nil, err
 	}
-	amount, err := strconv.ParseFloat(strings.Replace(line[4], "$", "", -1), 64)
+	amount, err := parseAmount(line[4])
 	if err != nil {
+		fmt.Println(line[4])
 		return nil, err
 	}
-	balance, err := strconv.ParseFloat(strings.Replace(line[5], "$", "", -1), 64)
+	balance, err := parseAmount(line[5])
 	if err != nil {
+		fmt.Println(line[5])
 		return nil, err
 	}
 	return &UsageRecord{
@@ -119,6 +129,7 @@ func parseUsageRecord(line []string) (*UsageRecord, error) {
 
 const usageDateLayout = "02/01/2006 15:04:05 PM"
 
+// Parse converts a compass card csv response into UsageRecords
 func Parse(raw []byte) ([]UsageRecord, error) {
 	r := csv.NewReader(strings.NewReader(string(raw)))
 	header := true
@@ -145,6 +156,48 @@ func Parse(raw []byte) ([]UsageRecord, error) {
 	return lines, nil
 }
 
+// Cards loads all available cards from your compasscard account
+func (s *Session) Cards() ([]string, error) {
+	resp, err := s.client.Get(fmt.Sprintf("%s/ManageCards", endpoint))
+	if err != nil {
+		return nil, err
+	}
+
+	doc, err := html.Parse(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := []string{}
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.Data == "input" {
+			isCard := false
+			for _, attr := range n.Attr {
+				if attr.Key == "id" && attr.Val == "Content_ManageCard_hfSerialNo" {
+					isCard = true
+					break
+				}
+			}
+			if isCard {
+				for _, attr := range n.Attr {
+					if attr.Key == "value" {
+						ids = append(ids, attr.Val)
+						break
+					}
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(doc)
+
+	return ids, nil
+}
+
+// Usage looks up a specific compasscard usage
 func (s *Session) Usage(ccsn string, opts UsageOptions) ([]UsageRecord, []byte, error) {
 	q := url.Values{}
 	q.Set("type", "2")
@@ -176,12 +229,18 @@ func (s *Session) Usage(ccsn string, opts UsageOptions) ([]UsageRecord, []byte, 
 func (s *Session) login(username, password string) error {
 	form := url.Values{}
 	form.Add("__CSRFTOKEN", s.csrfToken)
+	form.Add("__EVENTTARGET", "")
+	form.Add("__EVENTARGUMENT", "")
+	form.Add("ctl00$txtSignInEmail", "")
+	form.Add("ctl00$txtSignInPassword", "")
+	form.Add("ctl00$Content$passwordInfo$email", "")
 	form.Add("__VIEWSTATE", s.evntState)
 	form.Add("__VIEWSTATEGENERATOR", s.evntGenerator)
 	form.Add("__EVENTVALIDATION", s.evntValidation)
 	form.Add("ctl00$Content$btnSignIn", "Sign in")
 	form.Add("ctl00$Content$emailInfo$txtEmail", username)
 	form.Add("ctl00$Content$passwordInfo$txtPassword", password)
+
 	req, err := http.NewRequest("POST", fmt.Sprintf("%s/SignIn", endpoint), strings.NewReader(form.Encode()))
 	if err != nil {
 		return err
@@ -202,7 +261,45 @@ func (s *Session) login(username, password string) error {
 	return nil
 }
 
-func New(username, password string) (*Session, error) {
+// TODO add SignOut call to session
+func (s *Session) Signout() error {
+	form := url.Values{}
+	form.Add("__CSRFTOKEN", s.csrfToken)
+	form.Add("__VIEWSTATE", s.evntState)
+	form.Add("__EVENTTARGET", "ctl00$btnSignOut")
+	form.Add("__EVENTARGUMENT", "")
+	form.Add("__VIEWSTATEGENERATOR", s.evntGenerator)
+	form.Add("__EVENTVALIDATION", s.evntValidation)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/ManageCards", endpoint), strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+type ClientOption interface {
+	Apply(*Session)
+}
+
+type ClientOptionFunc func(*Session)
+
+func (fnc ClientOptionFunc) Apply(s *Session) {
+	fnc(s)
+}
+
+func WithCookieJar(jar *cookiejar.Jar) ClientOption {
+	return ClientOptionFunc(func(s *Session) {
+		s.client.Jar = jar
+	})
+}
+
+func New(username, password string, options ...ClientOption) (*Session, error) {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar: jar,
@@ -210,6 +307,9 @@ func New(username, password string) (*Session, error) {
 
 	s := &Session{
 		client: client,
+	}
+	for _, opt := range options {
+		opt.Apply(s)
 	}
 	if err := s.populateCSRF(); err != nil {
 		return nil, err

@@ -46,6 +46,7 @@ func (s *Session) populateCSRF() error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
 		return err
@@ -162,6 +163,7 @@ func (s *Session) Cards() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer resp.Body.Close()
 
 	doc, err := html.Parse(resp.Body)
 	if err != nil {
@@ -213,6 +215,7 @@ func (s *Session) Usage(ccsn string, opts UsageOptions) ([]UsageRecord, []byte, 
 	if err != nil {
 		return nil, nil, err
 	}
+	defer resp.Body.Close()
 
 	bs, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
@@ -253,11 +256,6 @@ func (s *Session) login(username, password string) error {
 	}
 	defer resp.Body.Close()
 
-	// bs, err := ioutil.ReadAll(resp.Body)
-	// if err != nil {
-	// 	return err
-	// }
-
 	return nil
 }
 
@@ -279,7 +277,7 @@ func (s *Session) Signout() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
 	return nil
 }
 
